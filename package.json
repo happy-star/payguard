@@ -1,0 +1,23 @@
+{
+  "name": "payguard",
+  "private": true,
+  "version": "1.0.0",
+  "description": "PayGuard — an AI milestone hold for freelance work, built on PayPal Sandbox Orders v2.",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev -w payguard-server\" \"npm run dev -w payguard-client\"",
+    "test": "npm run test -w payguard-server",
+    "typecheck": "npm run typecheck -w payguard-server && npm run typecheck -w payguard-client",
+    "build": "npm run build -w payguard-client && npm run typecheck -w payguard-server",
+    "start": "npm run start -w payguard-server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
