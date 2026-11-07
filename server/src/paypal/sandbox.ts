@@ -154,20 +154,23 @@ export function createSandboxProvider(config: SandboxConfig): PaypalProvider {
       return { status: typeof record.status === "string" ? record.status : "VOIDED" };
     },
     async verifyWebhook(headers, event) {
-      if (!config.webhookId) return true;
+      // Missing configuration is not a successful check. Callers must fail closed.
+      if (!config.webhookId) return false;
       const certUrl = headers["paypal-cert-url"];
       const transmissionId = headers["paypal-transmission-id"];
       const transmissionSig = headers["paypal-transmission-sig"];
       const transmissionTime = headers["paypal-transmission-time"];
       const authAlgo = headers["paypal-auth-algo"];
       if (!certUrl || !transmissionId || !transmissionSig || !transmissionTime || !authAlgo) return false;
-      let host = "";
+      let hostname = "";
       try {
-        host = new URL(certUrl).host;
+        const parsed = new URL(certUrl);
+        if (parsed.protocol !== "https:") return false;
+        hostname = parsed.hostname;
       } catch {
         return false;
       }
-      if (!isPaypalCertHost(host)) return false;
+      if (!isPaypalCertHost(hostname)) return false;
       const body = await paypal("/v1/notifications/verify-webhook-signature", `wh-${transmissionId}`, {
         method: "POST",
         body: JSON.stringify({

@@ -37,11 +37,18 @@ after(async () => {
 test("health reports mock mode and does not leak secrets", async () => {
   const health = await api(base, "/api/health");
   assert.equal(health.status, 200);
-  const body = health.body as { paypal: string; ai: string; intent: string; model: string | null };
+  const body = health.body as {
+    paypal: string;
+    ai: string;
+    intent: string;
+    model: string | null;
+    webhookVerification: boolean;
+  };
   assert.equal(body.paypal, "mock");
   assert.equal(body.ai, "mock");
   assert.equal(body.intent, "AUTHORIZE");
   assert.equal(body.model, null);
+  assert.equal(body.webhookVerification, false);
   assert.equal(JSON.stringify(health.body).includes("secret"), false);
 });
 

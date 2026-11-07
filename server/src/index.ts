@@ -19,6 +19,9 @@ app.listen(config.port, "0.0.0.0", () => {
   console.log(`PayGuard API listening on http://127.0.0.1:${config.port}`);
   console.log(paypal);
   console.log(ai);
+  if (config.paypalMode === "sandbox" && !config.webhookVerification) {
+    console.log("Sandbox webhooks are rejected until PAYPAL_WEBHOOK_ID is set.");
+  }
   if (!config.serveStatic) {
     console.log(`UI dev server expected at ${config.clientOrigin}`);
   }

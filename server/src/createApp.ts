@@ -245,17 +245,29 @@ export function createApp(options: AppOptions = {}) {
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         throw new HttpError(400, "Webhook body must be a JSON object.");
       }
-      let verified: "skipped" | "verified" = "skipped";
-      if (config.webhookVerification) {
-        const ok = await sandbox.verifyWebhook(paypalHeaders(req), req.body);
-        if (!ok) {
-          res.status(401).json({ error: "PayPal webhook signature was not verified." });
+      // Sandbox events can authorize a real order or mark a hold captured or voided.
+      // Apply them only after PayPal has verified the signature. Mock mode has no signature.
+      if (config.paypalMode === "sandbox") {
+        if (!config.webhookVerification) {
+          res.status(503).json({
+            error:
+              "PayPal webhook verification is not configured. Set PAYPAL_WEBHOOK_ID. The event was not applied.",
+          });
           return;
         }
-        verified = "verified";
+        const ok = await sandbox.verifyWebhook(paypalHeaders(req), req.body);
+        if (!ok) {
+          res.status(401).json({
+            error: "PayPal webhook signature was not verified. The event was not applied.",
+          });
+          return;
+        }
+        const result = await service.applyWebhook(req.body);
+        res.json({ received: true, verified: "verified", ...result });
+        return;
       }
       const result = await service.applyWebhook(req.body);
-      res.json({ received: true, verified, ...result });
+      res.json({ received: true, verified: "skipped", ...result });
     }),
   );
 

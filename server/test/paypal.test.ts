@@ -87,12 +87,73 @@ test("webhook verification rejects certificates that are not from PayPal", async
   assert.equal(verifyCalls, 0);
   assert.equal(
     await paypal.verifyWebhook(
+      { ...headers, "paypal-cert-url": "http://api.sandbox.paypal.com/v1/notifications/certs/CERT" },
+      { event_type: "CHECKOUT.ORDER.APPROVED" },
+    ),
+    false,
+  );
+  assert.equal(verifyCalls, 0);
+  assert.equal(
+    await paypal.verifyWebhook(
       { ...headers, "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/CERT" },
       { event_type: "CHECKOUT.ORDER.APPROVED" },
     ),
     true,
   );
   assert.equal(verifyCalls, 1);
+});
+
+test("webhook verification fails closed without a webhook id and does not call PayPal", async () => {
+  let calls = 0;
+  const fetchImpl: typeof fetch = async () => {
+    calls += 1;
+    return Response.json({ verification_status: "SUCCESS" });
+  };
+  const paypal = createSandboxProvider({
+    clientId: "id",
+    clientSecret: "secret",
+    apiBase: "https://api-m.sandbox.paypal.com",
+    publicBaseUrl: "http://127.0.0.1:4317",
+    fetchImpl,
+  });
+  const headers = {
+    "paypal-auth-algo": "SHA256withRSA",
+    "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/CERT",
+    "paypal-transmission-id": "tx",
+    "paypal-transmission-sig": "sig",
+    "paypal-transmission-time": "2026-11-05T00:00:00Z",
+  };
+  assert.equal(await paypal.verifyWebhook(headers, { event_type: "PAYMENT.CAPTURE.COMPLETED" }), false);
+  assert.equal(calls, 0);
+});
+
+test("webhook verification rejects a PayPal FAILURE status", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/oauth2/token")) return Response.json({ access_token: "tok", expires_in: 60 });
+    return Response.json({ verification_status: "FAILURE" });
+  };
+  const paypal = createSandboxProvider({
+    clientId: "id",
+    clientSecret: "secret",
+    webhookId: "WH-123",
+    apiBase: "https://api-m.sandbox.paypal.com",
+    publicBaseUrl: "http://127.0.0.1:4317",
+    fetchImpl,
+  });
+  assert.equal(
+    await paypal.verifyWebhook(
+      {
+        "paypal-auth-algo": "SHA256withRSA",
+        "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/CERT",
+        "paypal-transmission-id": "tx",
+        "paypal-transmission-sig": "sig",
+        "paypal-transmission-time": "2026-11-05T00:00:00Z",
+      },
+      { event_type: "PAYMENT.AUTHORIZATION.VOIDED" },
+    ),
+    false,
+  );
 });
 
 function headersOf(init?: RequestInit): Record<string, string> {

@@ -42,7 +42,8 @@ export function createMockProvider(clientOrigin: string): PaypalProvider {
       return { status: "VOIDED" };
     },
     async verifyWebhook() {
-      return true;
+      // Mock mode has no PayPal signature. Never report one of these events as verified.
+      return false;
     },
   };
 }
