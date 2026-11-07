@@ -6,6 +6,16 @@ It is a hackathon prototype for the [PayPal AI Hackathon](https://paypalaihackat
 
 PayPal honors an authorization for **3 days** and still allows capture for up to **29 days**. `AUTHORIZE` supports a single purchase unit, so each deal is one hold and one capture, even when the gig lists several conditions.
 
+## Release gate
+
+The model does not capture or void.
+
+It drafts terms from the gig description: fee, names, due date, milestones, and risks. A person can edit every field. Nothing is sent to PayPal until they press **Create authorization hold**. The buyer approves the order on PayPal Sandbox, or on the mock screen. Funds stay reserved until a person presses **Release funds** or **Void the hold**.
+
+Unchecked milestones show a warning in that dialog. They do not block release. There is no pass/fail score, and no model output calls capture or void. **Rewrite** only replaces the plain-language status sentence.
+
+PayGuard is not a licensed escrow. A PayPal authorization holds the buyer's funds, then a later capture settles them to the merchant on this app's API credentials.
+
 ## Quick start
 
 Requires Node.js 22 or newer.
@@ -45,22 +55,38 @@ CLIENT_ORIGIN=http://127.0.0.1:4318
 5. Restart `npm run dev`. The header pill should say **PayPal · Sandbox**.
 6. Create a hold. **Approve on PayPal Sandbox** opens `sandbox.paypal.com`. Sign in as the **personal** sandbox buyer. PayPal’s button may say Pay. The order intent is `AUTHORIZE`, so approval reserves the funds instead of capturing them.
 7. PayPal redirects to `PUBLIC_BASE_URL/api/paypal/return`, which calls `POST /v2/checkout/orders/{id}/authorize`, then sends the browser back to the deal.
-8. **Release funds** calls `POST /v2/payments/authorizations/{id}/capture`. **Void the hold** calls `POST /v2/payments/authorizations/{id}/void`.
+8. **Release funds** calls `POST /v2/payments/authorizations/{id}/capture`. **Void the hold** calls `POST /v2/payments/authorizations/{id}/void`. Those calls happen only from those actions.
+9. To let PayPal update a deal by webhook, set `PAYPAL_WEBHOOK_ID` to that Sandbox webhook's id. Until it is set, `POST /api/paypal/webhook` refuses the body and leaves the deal unchanged. The return URL, **Release funds**, and **Void the hold** do not depend on it.
 
 `PUBLIC_BASE_URL` must be the API origin (`4317` in dev), because that is the host PayPal redirects to. The Vite app on `4318` proxies `/api` to it.
 
-### Webhook stub
+### Webhook verification
 
-`POST /api/paypal/webhook` accepts PayPal’s JSON events. These update a deal when `custom_id` or the order id matches:
+`POST /api/paypal/webhook` can record these events when `custom_id`, the order id, or the authorization id matches a deal:
 
 - `CHECKOUT.ORDER.APPROVED` (authorizes if the buyer never returned)
 - `PAYMENT.AUTHORIZATION.CREATED`
 - `PAYMENT.CAPTURE.COMPLETED`
 - `PAYMENT.AUTHORIZATION.VOIDED`
 
-Signature checks run only when `PAYPAL_WEBHOOK_ID` is set and PayPal mode is Sandbox. PayGuard posts the headers and body to `/v1/notifications/verify-webhook-signature` and rejects certificates whose host is not `paypal.com`. Without a webhook id, the route accepts events so you can test with curl. Set the id before exposing the URL.
+Sandbox mode does not apply an event unless PayPal verifies it. `GET /api/health` reports `webhookVerification: true` only when PayPal mode is sandbox and `PAYPAL_WEBHOOK_ID` is set.
 
-Point a Sandbox webhook at a public tunnel to `http://127.0.0.1:4317/api/paypal/webhook` if you want PayPal to deliver events. The return URL alone is enough for the happy path.
+| PayPal mode | `PAYPAL_WEBHOOK_ID` | Signature | What the route does |
+| --- | --- | --- | --- |
+| sandbox | unset | missing or present | **Fail closed.** HTTP 503. The deal is not changed. PayPal is not asked to verify the body. |
+| sandbox | set | missing headers, a non-https certificate URL, a host outside `paypal.com`, or any verify result other than `SUCCESS` | **Fail closed.** HTTP 401. The deal is not changed. |
+| sandbox | set | PayPal `verification_status` is `SUCCESS` | The event is applied. The response says `verified: "verified"`. |
+| mock | ignored | none | Local stand-in for `npm test` and curl. The response says `verified: "skipped"`. It does not call PayPal. Do not point a PayPal webhook at a mock-mode server. |
+
+Verification posts the headers and event to `/v1/notifications/verify-webhook-signature` with the app's Sandbox credentials. A certificate URL is sent there only when it is `https` and its host is `paypal.com` or a subdomain of it. If that call errors, the route returns HTTP 500 and does not change the deal.
+
+A verified capture or void event updates the local deal so it matches PayPal. It does not call PayPal's capture or void APIs. Those API calls happen only when a person uses **Release funds** or **Void the hold**. `CHECKOUT.ORDER.APPROVED`, once verified, can call PayPal authorize if the buyer never hit the return URL.
+
+Repeating a verified event does not capture or void twice. The deal moves from `created` or `approved` to `authorized`, and from `authorized` to `captured` or `voided`. There is no separate transmission-id ledger.
+
+This check is the PayPal webhook boundary. The demo routes that list deals and release or void a hold have no user accounts. A public Sandbox demo is not an authorization system for a live merchant.
+
+Point a Sandbox webhook at `PUBLIC_BASE_URL/api/paypal/webhook` only after `PAYPAL_WEBHOOK_ID` is set. The return URL alone is enough for the happy path.
 
 ## AI setup
 
@@ -96,7 +122,7 @@ Mock path, about two minutes, no accounts:
 
 Sandbox path: follow [Sandbox setup](#sandbox-setup), repeat steps 2–6, and approve with a sandbox personal account. The deal’s PayPal order id, authorization id, and capture id are on the deal page.
 
-`npm test` covers extraction, the mock happy path, void, cancel, the return URL, a webhook, and a Sandbox client that records the `AUTHORIZE` request against a fake PayPal. No network calls leave the machine.
+`npm test` covers extraction, the mock happy path, void, cancel, the return URL, a mock webhook, and Sandbox webhook cases for a missing webhook id, an invalid signature, and a verified signature. The Sandbox client records the `AUTHORIZE` request against a fake PayPal. No network calls leave the machine.
 
 ## Architecture
 
@@ -107,7 +133,7 @@ flowchart LR
   API --> Store["data/deals.json"]
   API --> PayPal["Orders v2 Sandbox or mock"]
   PayPal -->|return or cancel| API
-  PayPal -->|webhook stub| API
+  PayPal -->|verified webhook| API
 ```
 
 | Piece | Role |
@@ -143,7 +169,7 @@ Each deal remembers whether it was created in mock or Sandbox, so sample deals s
 | POST | `/api/deals/:id/milestones/:milestoneId` | Check a condition on or off. |
 | GET | `/api/paypal/return` | PayPal return URL. Authorizes, then redirects to the UI. |
 | GET | `/api/paypal/cancel` | PayPal cancel URL. |
-| POST | `/api/paypal/webhook` | Webhook stub. |
+| POST | `/api/paypal/webhook` | Sandbox: verified events only. Mock: local stand-in. |
 | POST | `/api/demo/seed` | Upsert three sample deals. |
 
 ## Scripts
@@ -181,7 +207,7 @@ Keep it under three minutes.
 
 You can submit early for the eligibility pre-check and edit the project until the deadline. A working repo with this README satisfies the “judges can run it” option. Also publish a public demo video under three minutes.
 
-Suggested tools line: PayPal Orders v2 Sandbox (`AUTHORIZE`, then capture or void) and an OpenAI-compatible chat model, with a built-in reader when no model key is configured.
+Suggested tools line: PayPal Orders v2 Sandbox (`AUTHORIZE`, then a person captures or voids) and an OpenAI-compatible chat model that drafts terms, with a built-in reader when no model key is configured. The model does not decide release. See [Release gate](#release-gate).
 
 Do not commit `.env`. Secrets stay in the environment.
 
